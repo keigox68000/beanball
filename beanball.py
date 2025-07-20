@@ -67,10 +67,14 @@ class Ball:
             GRID_SIZE * (FIELD_TOP_Y + 2), SCREEN_HEIGHT - GRID_SIZE * 2
         )
 
-        # 初期の進行方向をランダムに設定
-        angle = random.uniform(0, 2 * math.pi)
-        self.vx = math.cos(angle) * BALL_SPEED
-        self.vy = math.sin(angle) * BALL_SPEED
+        # 初期の進行方向を45度のいずれかに設定
+        vx = random.choice([-1, 1])
+        vy = random.choice([-1, 1])
+
+        # ベクトルを正規化して、速度をBALL_SPEEDに設定
+        norm = math.sqrt(vx**2 + vy**2)  # この値は常に√2
+        self.vx = (vx / norm) * BALL_SPEED
+        self.vy = (vy / norm) * BALL_SPEED
 
     def update(self):
         """ボールの位置を更新"""
@@ -94,11 +98,9 @@ class Game:
     def reset(self):
         """ゲームの状態をリセット"""
         self.score = 0
-        # タイムはフレーム単位で管理 (200秒 * 60fps)
         self.time = 200 * 60
         self.game_over = False
 
-        # フィールドを初期化（外周を壁で囲む）
         self.field = [[EMPTY] * FIELD_GRID_WIDTH for _ in range(FIELD_GRID_HEIGHT)]
         for y in range(FIELD_GRID_HEIGHT):
             for x in range(FIELD_GRID_WIDTH):
@@ -110,14 +112,11 @@ class Game:
                 ):
                     self.field[y][x] = WALL
 
-        # プレイヤーを中央に配置
         self.player = Player(FIELD_GRID_WIDTH // 2, FIELD_GRID_HEIGHT // 2)
-
-        # ボールを1つ生成
         self.balls = [Ball()]
 
-        # スコアボーナスの達成状況を管理
         self.time_bonus_checkpoints = [400, 1000, 1600, 2200, 2800, 3400]
+        # --- 修正点: ボールが増えるスコアのタイミングを変更 ---
         self.ball_add_checkpoints = [200, 400, 800, 1000, 1400, 1600, 2000]
         self.time_bonus_achieved = [False] * len(self.time_bonus_checkpoints)
         self.ball_add_achieved = [False] * len(self.ball_add_checkpoints)
@@ -135,14 +134,12 @@ class Game:
 
     def update_player(self):
         """プレイヤーの移動とブロック設置を処理"""
-        # 修正点: 6フレームに1回だけプレイヤーの更新処理を行う
         if pyxel.frame_count % 6 != 0:
             return
 
         old_x, old_y = self.player.x, self.player.y
         moved = False
 
-        # キー入力による移動
         if pyxel.btn(pyxel.KEY_LEFT):
             self.player.x -= 1
             moved = True
@@ -153,16 +150,13 @@ class Game:
             self.player.y -= 1
             moved = True
 
-        # 移動先が壁やブロックなら移動をキャンセル
         if self.field[self.player.y][self.player.x] != EMPTY:
             self.player.x, self.player.y = old_x, old_y
             moved = False
 
         if moved:
-            # 移動が確定した場合、移動元の位置にブロックを置く
             self.field[old_y][old_x] = BLOCK
         else:
-            # キー入力がない場合、下に移動（ブロックは置かない）
             if not (
                 pyxel.btn(pyxel.KEY_LEFT)
                 or pyxel.btn(pyxel.KEY_RIGHT)
@@ -175,95 +169,94 @@ class Game:
     def update_balls(self):
         """ボールの移動と衝突判定を処理"""
         for ball in self.balls:
-            ball.update()
-            self.handle_ball_collisions(ball)
+            self.handle_wall_block_collisions(ball)
+            self.handle_player_collision(ball)
 
-    def handle_ball_collisions(self, ball):
-        """ボールと壁、ブロック、プレイヤーとの衝突を処理"""
-        # --- 壁・ブロックとの衝突 ---
-        hit_x = False
-        hit_y = False
+    def handle_wall_block_collisions(self, ball):
+        """ボールと壁・ブロックの衝突を処理 (めり込み対策版)"""
 
-        # X方向の衝突判定
-        grid_y_top = int((ball.y - BALL_RADIUS - (FIELD_TOP_Y * GRID_SIZE)) / GRID_SIZE)
-        grid_y_bottom = int(
-            (ball.y + BALL_RADIUS - (FIELD_TOP_Y * GRID_SIZE)) / GRID_SIZE
-        )
+        # --- 1. X軸方向の移動と衝突解決 ---
+        ball.x += ball.vx
 
-        if ball.vx > 0:  # 右へ移動中
+        if ball.vx > 0:  # 右へ
             grid_x = int((ball.x + BALL_RADIUS) / GRID_SIZE)
-            if self.is_obstacle(grid_x, grid_y_top) or self.is_obstacle(
-                grid_x, grid_y_bottom
-            ):
-                self.handle_block_hit(grid_x, grid_y_top)
-                self.handle_block_hit(grid_x, grid_y_bottom)
-                hit_x = True
-        elif ball.vx < 0:  # 左へ移動中
+            check_y1 = int((ball.y - BALL_RADIUS - FIELD_TOP_Y * GRID_SIZE) / GRID_SIZE)
+            check_y2 = int((ball.y + BALL_RADIUS - FIELD_TOP_Y * GRID_SIZE) / GRID_SIZE)
+            hit1 = self.is_obstacle(grid_x, check_y1)
+            hit2 = self.is_obstacle(grid_x, check_y2)
+            if hit1 or hit2:
+                ball.x = grid_x * GRID_SIZE - BALL_RADIUS - 0.01  # わずかに押し戻す
+                ball.vx *= -1
+                if hit1:
+                    self.handle_block_hit(grid_x, check_y1)
+                if hit2:
+                    self.handle_block_hit(grid_x, check_y2)
+        elif ball.vx < 0:  # 左へ
             grid_x = int((ball.x - BALL_RADIUS) / GRID_SIZE)
-            if self.is_obstacle(grid_x, grid_y_top) or self.is_obstacle(
-                grid_x, grid_y_bottom
-            ):
-                self.handle_block_hit(grid_x, grid_y_top)
-                self.handle_block_hit(grid_x, grid_y_bottom)
-                hit_x = True
+            check_y1 = int((ball.y - BALL_RADIUS - FIELD_TOP_Y * GRID_SIZE) / GRID_SIZE)
+            check_y2 = int((ball.y + BALL_RADIUS - FIELD_TOP_Y * GRID_SIZE) / GRID_SIZE)
+            hit1 = self.is_obstacle(grid_x, check_y1)
+            hit2 = self.is_obstacle(grid_x, check_y2)
+            if hit1 or hit2:
+                ball.x = (
+                    (grid_x + 1) * GRID_SIZE + BALL_RADIUS + 0.01
+                )  # わずかに押し戻す
+                ball.vx *= -1
+                if hit1:
+                    self.handle_block_hit(grid_x, check_y1)
+                if hit2:
+                    self.handle_block_hit(grid_x, check_y2)
 
-        # Y方向の衝突判定
-        grid_x_left = int((ball.x - BALL_RADIUS) / GRID_SIZE)
-        grid_x_right = int((ball.x + BALL_RADIUS) / GRID_SIZE)
+        # --- 2. Y軸方向の移動と衝突解決 ---
+        ball.y += ball.vy
 
-        if ball.vy > 0:  # 下へ移動中
-            grid_y = int((ball.y + BALL_RADIUS - (FIELD_TOP_Y * GRID_SIZE)) / GRID_SIZE)
-            if self.is_obstacle(grid_x_left, grid_y) or self.is_obstacle(
-                grid_x_right, grid_y
-            ):
-                self.handle_block_hit(grid_x_left, grid_y)
-                self.handle_block_hit(grid_x_right, grid_y)
-                hit_y = True
-        elif ball.vy < 0:  # 上へ移動中
-            grid_y = int((ball.y - BALL_RADIUS - (FIELD_TOP_Y * GRID_SIZE)) / GRID_SIZE)
-            if self.is_obstacle(grid_x_left, grid_y) or self.is_obstacle(
-                grid_x_right, grid_y
-            ):
-                self.handle_block_hit(grid_x_left, grid_y)
-                self.handle_block_hit(grid_x_right, grid_y)
-                hit_y = True
+        if ball.vy > 0:  # 下へ
+            grid_y = int((ball.y + BALL_RADIUS - FIELD_TOP_Y * GRID_SIZE) / GRID_SIZE)
+            check_x1 = int((ball.x - BALL_RADIUS) / GRID_SIZE)
+            check_x2 = int((ball.x + BALL_RADIUS) / GRID_SIZE)
+            hit1 = self.is_obstacle(check_x1, grid_y)
+            hit2 = self.is_obstacle(check_x2, grid_y)
+            if hit1 or hit2:
+                ball.y = (
+                    (grid_y + FIELD_TOP_Y) * GRID_SIZE - BALL_RADIUS - 0.01
+                )  # わずかに押し戻す
+                ball.vy *= -1
+                if hit1:
+                    self.handle_block_hit(check_x1, grid_y)
+                if hit2:
+                    self.handle_block_hit(check_x2, grid_y)
+        elif ball.vy < 0:  # 上へ
+            grid_y = int((ball.y - BALL_RADIUS - FIELD_TOP_Y * GRID_SIZE) / GRID_SIZE)
+            check_x1 = int((ball.x - BALL_RADIUS) / GRID_SIZE)
+            check_x2 = int((ball.x + BALL_RADIUS) / GRID_SIZE)
+            hit1 = self.is_obstacle(check_x1, grid_y)
+            hit2 = self.is_obstacle(check_x2, grid_y)
+            if hit1 or hit2:
+                ball.y = (
+                    (grid_y + 1 + FIELD_TOP_Y) * GRID_SIZE + BALL_RADIUS + 0.01
+                )  # わずかに押し戻す
+                ball.vy *= -1
+                if hit1:
+                    self.handle_block_hit(check_x1, grid_y)
+                if hit2:
+                    self.handle_block_hit(check_x2, grid_y)
 
-        # --- 修正点: より自然な反射ロジック ---
-        if hit_x and hit_y:  # 角に当たった場合
-            ball.vx *= -1
-            ball.vy *= -1
-        elif hit_x:  # 左右の壁/ブロックに当たった場合
-            ball.vx *= -1
-            # 膠着状態を防ぐため、垂直方向の速度に僅かなランダム性を加える
-            ball.vy += random.uniform(-0.1, 0.1)
-        elif hit_y:  # 上下の壁/ブロックに当たった場合
-            ball.vy *= -1
-            # 膠着状態を防ぐため、水平方向の速度に僅かなランダム性を加える
-            ball.vx += random.uniform(-0.1, 0.1)
-
-        # 速度を正規化して、常に一定の速さを保つ
-        if hit_x or hit_y:
-            current_speed = math.sqrt(ball.vx**2 + ball.vy**2)
-            if current_speed > 0:
-                ball.vx = (ball.vx / current_speed) * BALL_SPEED
-                ball.vy = (ball.vy / current_speed) * BALL_SPEED
-        # --- 修正ここまで ---
-
-        # --- プレイヤーとの衝突 ---
+    def handle_player_collision(self, ball):
+        """プレイヤーとの衝突を処理"""
         player_px = (self.player.x + 0.5) * GRID_SIZE
         player_py = (self.player.y + 0.5 + FIELD_TOP_Y) * GRID_SIZE
         dist_x = ball.x - player_px
         dist_y = ball.y - player_py
         if dist_x**2 + dist_y**2 < (BALL_RADIUS + GRID_SIZE // 2) ** 2:
             self.time = max(0, self.time - 100 * 60)  # 100秒減らす
-            # プレイヤーから離れるようにボールを反射
             norm = math.sqrt(dist_x**2 + dist_y**2)
             if norm > 0:
                 ball.vx = (dist_x / norm) * BALL_SPEED
                 ball.vy = (dist_y / norm) * BALL_SPEED
-            else:  # まれに中心で衝突した場合
-                ball.vx *= -1
-                ball.vy *= -1
+            else:
+                angle = random.uniform(0, 2 * math.pi)
+                ball.vx = math.cos(angle) * BALL_SPEED
+                ball.vy = math.sin(angle) * BALL_SPEED
 
     def is_obstacle(self, x, y):
         """指定されたグリッド座標が障害物（壁かブロック）か判定"""
@@ -285,14 +278,11 @@ class Game:
         else:
             self.game_over = True
 
-        # スコアボーナスチェック
-        # タイム追加
         for i, score_req in enumerate(self.time_bonus_checkpoints):
             if not self.time_bonus_achieved[i] and self.score >= score_req:
-                self.time += 50 * 60  # 50秒追加
+                self.time += 50 * 60
                 self.time_bonus_achieved[i] = True
 
-        # ボール追加
         for i, score_req in enumerate(self.ball_add_checkpoints):
             if not self.ball_add_achieved[i] and self.score >= score_req:
                 if len(self.balls) < MAX_BALLS:
@@ -303,15 +293,14 @@ class Game:
         """画面全体を描画"""
         pyxel.cls(pyxel.COLOR_BLACK)
 
-        if self.game_over:
-            self.draw_game_over()
-            return
-
         self.draw_hud()
         self.draw_field()
         self.player.draw()
         for ball in self.balls:
             ball.draw()
+
+        if self.game_over:
+            self.draw_game_over_overlay()
 
     def draw_hud(self):
         """スコアと時間を表示"""
@@ -343,8 +332,14 @@ class Game:
                         BLOCK_COLOR,
                     )
 
-    def draw_game_over(self):
-        """ゲームオーバー画面を表示"""
+    def draw_game_over_overlay(self):
+        """ゲームオーバーのテキストを画面に重ねて表示"""
+        text_w = 120
+        text_h = 40
+        bg_x = (SCREEN_WIDTH - text_w) / 2
+        bg_y = (SCREEN_HEIGHT - text_h) / 2 - 10
+        pyxel.rect(bg_x, bg_y, text_w, text_h, pyxel.COLOR_BLACK)
+
         text = "GAME OVER"
         x = (SCREEN_WIDTH - len(text) * 4) / 2
         y = SCREEN_HEIGHT / 2 - 8
@@ -354,9 +349,9 @@ class Game:
         x = (SCREEN_WIDTH - len(score_text) * 4) / 2
         pyxel.text(x, y + 10, score_text, pyxel.COLOR_WHITE)
 
-        restart_text = "PRESS ENTER TO RESTART"
+        restart_text = "PRESS ENTER"
         x = (SCREEN_WIDTH - len(restart_text) * 4) / 2
-        pyxel.text(x, y + 30, restart_text, pyxel.COLOR_LIME)
+        pyxel.text(x, y + 22, restart_text, pyxel.COLOR_LIME)
 
 
 # ゲームを開始
